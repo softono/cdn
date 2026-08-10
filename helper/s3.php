@@ -48,10 +48,23 @@ class S3Helper
         ResponseHelper::sendXml(200, $xml);
     }
 
+    public static function validateObjectKey(string $objectKey): void
+    {
+        if (trim($objectKey) === '' || str_contains($objectKey, '..') || str_starts_with($objectKey, '\\')) {
+            ResponseHelper::sendS3Error(400, 'InvalidArgument', 'Invalid object key format or path traversal detected.');
+        }
+    }
+
     public static function createBucket(string $name): void
     {
+        $name = strtolower(trim($name));
+        $reserved = ['login', 'register', 'dashboard', 'buckets', 'objects', 'api-keys', 'admin', 'storage', 'helper', 'index.php'];
+        if (in_array($name, $reserved, true)) {
+            ResponseHelper::sendS3Error(400, 'InvalidBucketName', 'Bucket name is a reserved system name.');
+        }
+
         if (!preg_match('/^[a-z0-9.\-]{3,63}$/', $name)) {
-            ResponseHelper::sendS3Error(400, 'InvalidBucketName', 'The specified bucket is not valid.');
+            ResponseHelper::sendS3Error(400, 'InvalidBucketName', 'The specified bucket name is not valid.');
         }
 
         $existing = self::getBucket($name);
@@ -136,6 +149,13 @@ class S3Helper
 
     public static function putObject(array $bucket, string $objectKey): void
     {
+        self::validateObjectKey($objectKey);
+
+        $maxSize = (int)env('MAX_UPLOAD_SIZE', 536870912);
+        if (isset($_SERVER['CONTENT_LENGTH']) && (int)$_SERVER['CONTENT_LENGTH'] > $maxSize) {
+            ResponseHelper::sendS3Error(413, 'EntityTooLarge', 'Your proposed upload exceeds the maximum allowed object size.');
+        }
+
         $input = fopen('php://input', 'rb');
         if (!$input) {
             ResponseHelper::sendS3Error(500, 'InternalError', 'Failed to read request body stream.');
@@ -167,6 +187,14 @@ class S3Helper
             if ($chunk === false) break;
             $len = strlen($chunk);
             $size += $len;
+
+            if ($size > $maxSize) {
+                fclose($input);
+                fclose($output);
+                @unlink($fullPath);
+                ResponseHelper::sendS3Error(413, 'EntityTooLarge', 'Your proposed upload exceeds the maximum allowed object size.');
+            }
+
             hash_update($hashContext, $chunk);
             fwrite($output, $chunk);
         }
@@ -211,12 +239,16 @@ class S3Helper
         }
 
         http_response_code(200);
+        header('Content-Length: 0');
         header('ETag: "' . $checksum . '"');
         exit;
     }
 
     public static function copyObject(array $srcBucket, string $srcObjectKey, array $destBucket, string $destObjectKey): void
     {
+        self::validateObjectKey($srcObjectKey);
+        self::validateObjectKey($destObjectKey);
+
         $srcObj = DB::fetchOne("SELECT * FROM `objects` WHERE `bucket_id` = ? AND `object_key` = ?", [$srcBucket['id'], $srcObjectKey]);
         if (!$srcObj) {
             ResponseHelper::sendS3Error(404, 'NoSuchKey', 'The source object key does not exist.');
@@ -267,6 +299,8 @@ class S3Helper
 
     public static function getObject(array $bucket, string $objectKey, bool $isHead = false): void
     {
+        self::validateObjectKey($objectKey);
+
         $obj = DB::fetchOne("SELECT * FROM `objects` WHERE `bucket_id` = ? AND `object_key` = ?", [$bucket['id'], $objectKey]);
         if (!$obj) {
             ResponseHelper::sendS3Error(404, 'NoSuchKey', 'The specified key does not exist.');
@@ -284,6 +318,8 @@ class S3Helper
 
     public static function deleteObject(array $bucket, string $objectKey): void
     {
+        self::validateObjectKey($objectKey);
+
         $obj = DB::fetchOne("SELECT * FROM `objects` WHERE `bucket_id` = ? AND `object_key` = ?", [$bucket['id'], $objectKey]);
         if ($obj) {
             $filePath = self::getStorageBaseDir() . '/' . $bucket['name'] . '/' . $obj['relative_storage_path'];

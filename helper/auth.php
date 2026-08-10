@@ -44,31 +44,39 @@ class AuthHelper
     public static function authenticate(string $method, string $path, ?array $bucket = null): ?array
     {
         $authHeader = self::getAuthorizationHeader();
+        $result = null;
 
         // 1. HMAC v1 scheme: Authorization: HMAC {access_key}:{signature}
         if ($authHeader && str_starts_with($authHeader, 'HMAC ')) {
-            return self::verifyHmacV1($method, $path, $authHeader);
+            $result = self::verifyHmacV1($method, $path, $authHeader);
         }
-
         // 2. AWS SigV4 scheme (Header or Query)
-        if (($authHeader && str_starts_with($authHeader, 'AWS4-HMAC-SHA256 ')) || isset($_GET['X-Amz-Algorithm'])) {
-            return self::verifySigV4($method, $path, $authHeader);
+        elseif (($authHeader && str_starts_with($authHeader, 'AWS4-HMAC-SHA256 ')) || isset($_GET['X-Amz-Algorithm'])) {
+            $result = self::verifySigV4($method, $path, $authHeader);
         }
-
         // 3. Pre-signed URL v1 scheme: ?AccessKey=...&Expires=...&Signature=...
-        if (isset($_GET['AccessKey'], $_GET['Expires'], $_GET['Signature'])) {
-            return self::verifyPresignedV1($method, $path);
+        elseif (isset($_GET['AccessKey'], $_GET['Expires'], $_GET['Signature'])) {
+            $result = self::verifyPresignedV1($method, $path);
         }
-
         // 4. Anonymous access check for public bucket
-        if (in_array(strtoupper($method), ['GET', 'HEAD'], true)) {
+        elseif (in_array(strtoupper($method), ['GET', 'HEAD'], true)) {
             if ($bucket && isset($bucket['visibility']) && $bucket['visibility'] === 'public') {
                 return ['anonymous' => true, 'api_key' => null];
             }
         }
 
-        ResponseHelper::sendS3Error(401, 'AccessDenied', 'Authentication required.');
-        return null;
+        if (!$result) {
+            ResponseHelper::sendS3Error(401, 'AccessDenied', 'Authentication required.');
+        }
+
+        // Enforce bucket tenancy restriction if key is scoped to a specific bucket_id
+        if ($bucket && isset($result['api_key']['bucket_id']) && $result['api_key']['bucket_id'] !== null) {
+            if ((int)$result['api_key']['bucket_id'] !== (int)$bucket['id']) {
+                ResponseHelper::sendS3Error(403, 'AccessDenied', 'Access denied to this bucket.');
+            }
+        }
+
+        return $result;
     }
 
     private static function getApiKey(string $accessKey): ?array
@@ -178,7 +186,7 @@ class AuthHelper
             $amzDate = self::getHeader('x-amz-date') ?? self::getHeader('date') ?? '';
         }
 
-        if (!$credential || str_count($credential, '/') < 4) {
+        if (!$credential || substr_count($credential, '/') < 4) {
             ResponseHelper::sendS3Error(401, 'AuthorizationHeaderMalformed', 'The authorization header is malformed.');
         }
 
@@ -189,8 +197,13 @@ class AuthHelper
         $signedHeaders = explode(';', strtolower($signedHeadersParam));
         sort($signedHeaders);
 
-        // Canonical Request
-        $canonicalUri = '/' . ltrim($path, '/');
+        // Canonical Request URI (full path sent over wire including base path)
+        $rawPath = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?: '/';
+        $pathSegments = array_map(
+            fn ($segment) => str_replace('%7E', '~', rawurlencode(rawurldecode($segment))),
+            explode('/', $rawPath)
+        );
+        $canonicalUri = implode('/', $pathSegments) ?: '/';
         
         // Canonical Query String
         $params = $_GET;
