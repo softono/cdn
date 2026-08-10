@@ -1,0 +1,17 @@
+# Prevent directory listing and execution of scripts in storage directory
+Options -Indexes -ExecCGI
+
+<IfModule mod_php7.c>
+    php_flag engine off
+</IfModule>
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+
+RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .phps .phar
+RemoveType .php .phtml .php3 .php4 .php5 .php7 .phps .phar
+
+<FilesMatch "\.(php|phtml|php3|php4|php5|php7|phps|phar|asp|aspx|cgi|pl|exe)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
