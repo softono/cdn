@@ -29,16 +29,24 @@ $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?? '/';
 // Determine root directory offset if running inside subfolder
 $scriptName = dirname($_SERVER['SCRIPT_NAME']);
 $scriptName = str_replace('\\', '/', $scriptName);
+
 // DocumentRoot may point at the project root (with a root .htaccess routing
 // into public/) rather than at public/ itself, in which case SCRIPT_NAME's
-// dirname carries a trailing /public that isn't part of the client-visible URL.
+// dirname carries a trailing /public that the client may or may not have
+// included in the request URL. Support both: try the longer (with /public)
+// prefix first so an explicit .../public/bucket/key URL isn't mistaken for
+// a bucket literally named "public".
+$scriptNameCandidates = [$scriptName];
 if (str_ends_with($scriptName, '/public')) {
-    $scriptName = substr($scriptName, 0, -strlen('/public'));
+    $scriptNameCandidates[] = substr($scriptName, 0, -strlen('/public'));
 }
-if ($scriptName !== '/' && $scriptName !== '.' && str_starts_with($requestUri, $scriptName)) {
-    $path = substr($requestUri, strlen($scriptName));
-} else {
-    $path = $requestUri;
+
+$path = $requestUri;
+foreach ($scriptNameCandidates as $candidate) {
+    if ($candidate !== '/' && $candidate !== '.' && str_starts_with($requestUri, $candidate)) {
+        $path = substr($requestUri, strlen($candidate));
+        break;
+    }
 }
 
 $path = '/' . trim($path, '/');
