@@ -24,14 +24,17 @@ class S3Common
 
     public static function buildRelativeStoragePath(string $objectKey, ?string $fileUuid = null): string
     {
-        $parts = explode('/', ltrim($objectKey, '/'));
-        $ext = pathinfo($objectKey, PATHINFO_EXTENSION);
+        $cleanKey = ltrim(str_replace('\\', '/', $objectKey), '/');
+        $dir = dirname($cleanKey);
+        $ext = pathinfo($cleanKey, PATHINFO_EXTENSION);
         $uuid = $fileUuid ?? self::generateId();
-        $randomFilename = $uuid . ($ext !== '' ? '.' . $ext : '');
-        $parts[count($parts) - 1] = $randomFilename;
+        $filename = $uuid . ($ext !== '' ? '.' . $ext : '');
+        $dateStr = date('Y/m/d');
 
-        $insertIndex = min(2, max(0, count($parts) - 1));
-        array_splice($parts, $insertIndex, 0, [date('Y/m/d')]);
-        return implode('/', $parts);
+        if ($dir === '.' || $dir === '' || $dir === '/') {
+            return $dateStr . '/' . $filename;
+        }
+
+        return $dir . '/' . $dateStr . '/' . $filename;
     }
 }
