@@ -1,9 +1,9 @@
 <?php
 
 /**
- * Authentication Helper for S3 compatible API
+ * Authentication  for S3 compatible API (AWS SigV4 only)
  */
-class AuthHelper
+class Auth
 {
     public static function getAuthorizationHeader(): ?string
     {
@@ -41,140 +41,101 @@ class AuthHelper
         return null;
     }
 
+    /**
+     * Parses the raw QUERY_STRING (not $_GET, which collapses duplicate keys
+     * and mangles "." to "_" in key names) into ordered [key, value] pairs
+     * with the wire-format percent-encoding normalized.
+     */
+    public static function rawQueryPairs(): array
+    {
+        $raw = $_SERVER['QUERY_STRING'] ?? '';
+        if ($raw === '') {
+            return [];
+        }
+
+        $pairs = [];
+        foreach (explode('&', $raw) as $part) {
+            if ($part === '') {
+                continue;
+            }
+            $eq = strpos($part, '=');
+            if ($eq === false) {
+                $k = $part;
+                $v = '';
+            } else {
+                $k = substr($part, 0, $eq);
+                $v = substr($part, $eq + 1);
+            }
+            $pairs[] = [rawurldecode($k), rawurldecode($v)];
+        }
+        return $pairs;
+    }
+
+    private static function rawQueryParam(string $name): ?string
+    {
+        foreach (self::rawQueryPairs() as [$k, $v]) {
+            if ($k === $name) {
+                return $v;
+            }
+        }
+        return null;
+    }
+
     public static function authenticate(string $method, string $path, ?array $bucket = null): ?array
     {
         $authHeader = self::getAuthorizationHeader();
         $result = null;
 
-        // 1. HMAC v1 scheme: Authorization: HMAC {access_key}:{signature}
-        if ($authHeader && str_starts_with($authHeader, 'HMAC ')) {
-            $result = self::verifyHmacV1($method, $path, $authHeader);
-        }
-        // 2. AWS SigV4 scheme (Header or Query)
-        elseif (($authHeader && str_starts_with($authHeader, 'AWS4-HMAC-SHA256 ')) || isset($_GET['X-Amz-Algorithm'])) {
+        // 1. AWS SigV4 scheme (Header or Query)
+        if (($authHeader && str_starts_with($authHeader, 'AWS4-HMAC-SHA256 ')) || self::rawQueryParam('X-Amz-Algorithm') !== null) {
             $result = self::verifySigV4($method, $path, $authHeader);
         }
-        // 3. Pre-signed URL v1 scheme: ?AccessKey=...&Expires=...&Signature=...
-        elseif (isset($_GET['AccessKey'], $_GET['Expires'], $_GET['Signature'])) {
-            $result = self::verifyPresignedV1($method, $path);
-        }
-        // 4. Anonymous access check for public bucket
+        // 2. Anonymous access check for public bucket
         elseif (in_array(strtoupper($method), ['GET', 'HEAD'], true)) {
             if ($bucket && isset($bucket['visibility']) && $bucket['visibility'] === 'public') {
+                Log::setPrincipal('anonymous');
                 return ['anonymous' => true, 'api_key' => null];
             }
         }
 
         if (!$result) {
-            ResponseHelper::sendS3Error(401, 'AccessDenied', 'Authentication required.');
+            Response::sendS3Error(401, 'AccessDenied', 'Authentication required.');
         }
 
         // Enforce bucket tenancy restriction if key is scoped to a specific bucket_id
         if ($bucket && isset($result['api_key']['bucket_id']) && $result['api_key']['bucket_id'] !== null) {
-            if ((int)$result['api_key']['bucket_id'] !== (int)$bucket['id']) {
-                ResponseHelper::sendS3Error(403, 'AccessDenied', 'Access denied to this bucket.');
+            if ($result['api_key']['bucket_id'] !== $bucket['id']) {
+                Response::sendS3Error(403, 'AccessDenied', 'Access denied to this bucket.');
             }
         }
+
+        Log::setPrincipal($result['api_key']['access_key'] ?? null);
 
         return $result;
     }
 
-    private static function getApiKey(string $accessKey): ?array
+    private static function getApiKey(string $accessKey): array
     {
         $apiKey = DB::fetchOne("SELECT * FROM `api_keys` WHERE `access_key` = ? AND `status` = 'active'", [$accessKey]);
         if (!$apiKey) {
-            ResponseHelper::sendS3Error(401, 'InvalidAccessKeyId', 'The Access Key Id you provided does not exist in our records.');
+            Response::sendS3Error(401, 'InvalidAccessKeyId', 'The Access Key Id you provided does not exist in our records.');
         }
 
-        // Touch last_used_at
         DB::execute("UPDATE `api_keys` SET `last_used_at` = NOW() WHERE `id` = ?", [$apiKey['id']]);
 
         return $apiKey;
     }
 
-    private static function verifyHmacV1(string $method, string $path, string $authHeader): array
-    {
-        $credential = trim(substr($authHeader, 5));
-        if (!str_contains($credential, ':')) {
-            ResponseHelper::sendS3Error(401, 'InvalidArgument', 'Malformed HMAC authorization header.');
-        }
-
-        list($accessKey, $providedSignature) = explode(':', $credential, 2);
-        $apiKey = self::getApiKey($accessKey);
-
-        $date = self::getHeader('Date');
-        if (!$date) {
-            ResponseHelper::sendS3Error(401, 'AccessDenied', 'Missing Date header.');
-        }
-
-        $requestTimestamp = strtotime($date);
-        if ($requestTimestamp === false) {
-            ResponseHelper::sendS3Error(401, 'AccessDenied', 'Unparseable Date header.');
-        }
-
-        $tolerance = (int) env('CLOCK_SKEW_TOLERANCE', 300);
-        if (abs(time() - $requestTimestamp) > $tolerance) {
-            ResponseHelper::sendS3Error(401, 'RequestTimeTooSkewed', 'The difference between the request time and the current time is too large.');
-        }
-
-        $contentMd5 = self::getHeader('Content-MD5') ?? '';
-        $canonicalString = implode("\n", [
-            strtoupper($method),
-            '/' . ltrim($path, '/'),
-            $date,
-            $contentMd5
-        ]);
-
-        $secretKey = self::resolveSecretKey($apiKey['secret_key']);
-        $expectedSignature = base64_encode(hash_hmac('sha256', $canonicalString, $secretKey, true));
-
-        if (!hash_equals($expectedSignature, $providedSignature)) {
-            ResponseHelper::sendS3Error(403, 'SignatureDoesNotMatch', 'The request signature we calculated does not match the signature you provided.');
-        }
-
-        return ['anonymous' => false, 'api_key' => $apiKey];
-    }
-
-    private static function verifyPresignedV1(string $method, string $path): array
-    {
-        if (!in_array(strtoupper($method), ['GET', 'HEAD'], true)) {
-            ResponseHelper::sendS3Error(403, 'AccessDenied', 'Pre-signed URLs only support GET/HEAD.');
-        }
-
-        $accessKey = $_GET['AccessKey'];
-        $expires = (int) $_GET['Expires'];
-        $providedSignature = $_GET['Signature'];
-
-        if ($expires <= 0 || time() > $expires) {
-            ResponseHelper::sendS3Error(403, 'AccessDenied', 'Request has expired.');
-        }
-
-        $apiKey = self::getApiKey($accessKey);
-        $canonicalString = implode("\n", [
-            strtoupper($method),
-            '/' . ltrim($path, '/'),
-            (string) $expires
-        ]);
-
-        $secretKey = self::resolveSecretKey($apiKey['secret_key']);
-        $expectedSignature = base64_encode(hash_hmac('sha256', $canonicalString, $secretKey, true));
-
-        if (!hash_equals($expectedSignature, $providedSignature)) {
-            ResponseHelper::sendS3Error(403, 'SignatureDoesNotMatch', 'The request signature we calculated does not match the signature you provided.');
-        }
-
-        return ['anonymous' => false, 'api_key' => $apiKey];
-    }
-
     private static function verifySigV4(string $method, string $path, ?string $authHeader): array
     {
-        $isPresigned = isset($_GET['X-Amz-Algorithm']) && $_GET['X-Amz-Algorithm'] === 'AWS4-HMAC-SHA256';
+        $isPresigned = self::rawQueryParam('X-Amz-Algorithm') === 'AWS4-HMAC-SHA256';
 
         if ($isPresigned) {
-            $credential = $_GET['X-Amz-Credential'] ?? '';
-            $amzDate = $_GET['X-Amz-Date'] ?? '';
-            $signedHeadersParam = $_GET['X-Amz-SignedHeaders'] ?? '';
-            $providedSignature = $_GET['X-Amz-Signature'] ?? '';
+            $credential = self::rawQueryParam('X-Amz-Credential') ?? '';
+            $amzDate = self::rawQueryParam('X-Amz-Date') ?? '';
+            $signedHeadersParam = self::rawQueryParam('X-Amz-SignedHeaders') ?? '';
+            $providedSignature = self::rawQueryParam('X-Amz-Signature') ?? '';
+            $expires = (int) (self::rawQueryParam('X-Amz-Expires') ?? '0');
         } else {
             preg_match('/Credential=([^,]+)/', $authHeader, $mCred);
             preg_match('/SignedHeaders=([^,]+)/', $authHeader, $mHead);
@@ -184,15 +145,24 @@ class AuthHelper
             $signedHeadersParam = trim($mHead[1] ?? '');
             $providedSignature = trim($mSig[1] ?? '');
             $amzDate = self::getHeader('x-amz-date') ?? self::getHeader('date') ?? '';
+            $expires = null;
         }
 
         if (!$credential || substr_count($credential, '/') < 4) {
-            ResponseHelper::sendS3Error(401, 'AuthorizationHeaderMalformed', 'The authorization header is malformed.');
+            Response::sendS3Error(401, 'AuthorizationHeaderMalformed', 'The authorization header is malformed.');
         }
 
         list($accessKey, $dateStamp, $region, $service) = explode('/', $credential, 5);
+
+        if ($isPresigned) {
+            $requestTimestamp = strtotime($amzDate);
+            if ($requestTimestamp === false || $expires === null || $expires <= 0 || time() > ($requestTimestamp + $expires)) {
+                Response::sendS3Error(403, 'AccessDenied', 'Request has expired.');
+            }
+        }
+
         $apiKey = self::getApiKey($accessKey);
-        $secretKey = self::resolveSecretKey($apiKey['secret_key']);
+        $secretKey = $apiKey['secret_key'];
 
         $signedHeaders = explode(';', strtolower($signedHeadersParam));
         sort($signedHeaders);
@@ -204,15 +174,15 @@ class AuthHelper
             explode('/', $rawPath)
         );
         $canonicalUri = implode('/', $pathSegments) ?: '/';
-        
-        // Canonical Query String
-        $params = $_GET;
-        unset($params['X-Amz-Signature']);
+
+        // Canonical Query String, from the raw wire query string (avoids
+        // PHP's $_GET key-mangling and duplicate-key collapsing)
         $pairs = [];
-        foreach ($params as $k => $v) {
-            foreach ((array)$v as $val) {
-                $pairs[] = rawurlencode($k) . '=' . rawurlencode($val);
+        foreach (self::rawQueryPairs() as [$k, $v]) {
+            if ($k === 'X-Amz-Signature') {
+                continue;
             }
+            $pairs[] = rawurlencode($k) . '=' . rawurlencode($v);
         }
         sort($pairs);
         $canonicalQueryString = implode('&', $pairs);
@@ -254,26 +224,9 @@ class AuthHelper
         $expectedSignature = hash_hmac('sha256', $stringToSign, $kSigning);
 
         if (!hash_equals($expectedSignature, $providedSignature)) {
-            ResponseHelper::sendS3Error(403, 'SignatureDoesNotMatch', 'The request signature we calculated does not match the signature you provided.');
+            Response::sendS3Error(403, 'SignatureDoesNotMatch', 'The request signature we calculated does not match the signature you provided.');
         }
 
         return ['anonymous' => false, 'api_key' => $apiKey];
-    }
-
-    private static function resolveSecretKey(string $secretKeyRaw): string
-    {
-        // If it's standard plaintext string, return as is
-        if (!str_starts_with($secretKeyRaw, 'eyJ') && !str_starts_with($secretKeyRaw, 'aTox')) {
-            return $secretKeyRaw;
-        }
-
-        // Handle base64 encoded json payload if legacy Laravel encrypted key
-        $decoded = json_decode(base64_decode($secretKeyRaw), true);
-        if (is_array($decoded) && isset($decoded['value'])) {
-            // Decrypt with ENCRYPTION_KEY or return raw if not decryptable
-            return $secretKeyRaw;
-        }
-
-        return $secretKeyRaw;
     }
 }

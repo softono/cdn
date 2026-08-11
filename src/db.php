@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Singleton PDO database helper for MySQL
+ * Singleton PDO database  for MySQL
  */
 class DB
 {

@@ -8,13 +8,19 @@
 ini_set('display_errors', '0');
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);
 
-require_once __DIR__ . '/src/env.php';
-loadEnv(__DIR__ . '/.env');
+require_once __DIR__ . '/../src/env.php';
+loadEnv(__DIR__ . '/../.env');
 
-require_once __DIR__ . '/src/db.php';
-require_once __DIR__ . '/src/response.php';
-require_once __DIR__ . '/src/auth.php';
-require_once __DIR__ . '/src/s3.php';
+require_once __DIR__ . '/../src/log.php';
+Log::init();
+
+require_once __DIR__ . '/../src/db.php';
+require_once __DIR__ . '/../src/response.php';
+require_once __DIR__ . '/../src/auth.php';
+require_once __DIR__ . '/../src/s3/common.php';
+require_once __DIR__ . '/../src/s3/bucket.php';
+require_once __DIR__ . '/../src/s3/objects.php';
+require_once __DIR__ . '/../src/s3/listing.php';
 
 // Parse Request Method and URI Path
 $method = $_SERVER['REQUEST_METHOD'];
@@ -33,49 +39,90 @@ $path = '/' . trim($path, '/');
 $segments = array_values(array_filter(explode('/', $path)));
 
 // -------------------------------------------------------------
+// CORS preflight: never authenticated (browsers never attach
+// signatures/credentials to OPTIONS), so it's handled before routing.
+// -------------------------------------------------------------
+if ($method === 'OPTIONS') {
+    if (empty($segments)) {
+        http_response_code(204);
+        exit;
+    }
+
+    $bucket = S3Bucket::getBucket($segments[0]);
+    if (!$bucket) {
+        Response::sendS3Error(404, 'NoSuchBucket', 'The specified bucket does not exist.');
+    }
+
+    S3Bucket::applyCorsHeaders($bucket);
+    http_response_code(204);
+    exit;
+}
+
+// -------------------------------------------------------------
 // Route 1: Top-level Root (List Buckets)
 // -------------------------------------------------------------
 if (empty($segments)) {
     if ($method === 'GET') {
-        AuthHelper::authenticate($method, $path);
-        S3Helper::listBuckets();
+        $auth = Auth::authenticate($method, $path);
+        S3Bucket::listBuckets($auth['api_key'] ?? null);
     }
-    ResponseHelper::sendS3Error(405, 'MethodNotAllowed', 'The specified method is not allowed.');
+    Response::sendS3Error(405, 'MethodNotAllowed', 'The specified method is not allowed.');
 }
 
 // -------------------------------------------------------------
 // Route 2: Bucket Operations (1 Path Segment)
-// GET  /{bucket} -> List Objects in Bucket
-// PUT  /{bucket} -> Create Bucket
-// DELETE /{bucket} -> Delete Bucket
+// GET    /{bucket}            -> List Objects in Bucket
+// GET    /{bucket}?location   -> Bucket location
+// HEAD   /{bucket}            -> Bucket existence/permission check
+// PUT    /{bucket}            -> Create Bucket
+// POST   /{bucket}?delete     -> Batch delete objects
+// DELETE /{bucket}            -> Delete Bucket
 // -------------------------------------------------------------
 if (count($segments) === 1) {
     $bucketName = $segments[0];
 
-    if ($method === 'PUT') {
-        AuthHelper::authenticate($method, $path);
-        S3Helper::createBucket($bucketName);
+    $isSubresourceRequest = isset($_GET['location']) || isset($_GET['acl']) || isset($_GET['versioning']) || isset($_GET['policy']) || isset($_GET['cors']);
+
+    if ($method === 'PUT' && !$isSubresourceRequest) {
+        Auth::authenticate($method, $path);
+        S3Bucket::createBucket($bucketName);
     }
 
-    $bucket = S3Helper::getBucket($bucketName);
+    $bucket = S3Bucket::getBucket($bucketName);
     if (!$bucket) {
-        ResponseHelper::sendS3Error(404, 'NoSuchBucket', 'The specified bucket does not exist.');
+        Response::sendS3Error(404, 'NoSuchBucket', 'The specified bucket does not exist.');
+    }
+    S3Bucket::applyCorsHeaders($bucket);
+
+    if ($method === 'HEAD') {
+        Auth::authenticate($method, $path, $bucket);
+        http_response_code(200);
+        exit;
     }
 
     if ($method === 'GET') {
-        AuthHelper::authenticate($method, $path, $bucket);
-        $prefix = $_GET['prefix'] ?? '';
-        $marker = $_GET['marker'] ?? '';
-        $maxKeys = (int)($_GET['max-keys'] ?? 1000);
-        S3Helper::listObjects($bucket, $prefix, $marker, $maxKeys);
+        Auth::authenticate($method, $path, $bucket);
+        if (isset($_GET['location'])) {
+            S3Bucket::bucketLocation($bucket);
+        } elseif (isset($_GET['acl']) || isset($_GET['versioning']) || isset($_GET['policy']) || isset($_GET['cors'])) {
+            Response::sendS3Error(501, 'NotImplemented', 'This subresource is not implemented.');
+        } else {
+            S3Listing::listObjects($bucket, $_GET);
+        }
+    }
+
+    if ($method === 'POST' && isset($_GET['delete'])) {
+        Auth::authenticate($method, $path, $bucket);
+        $keys = S3Object::parseDeleteKeys(file_get_contents('php://input'));
+        S3Object::deleteObjects($bucket, $keys);
     }
 
     if ($method === 'DELETE') {
-        AuthHelper::authenticate($method, $path, $bucket);
-        S3Helper::deleteBucket($bucket);
+        Auth::authenticate($method, $path, $bucket);
+        S3Bucket::deleteBucket($bucket);
     }
 
-    ResponseHelper::sendS3Error(405, 'MethodNotAllowed', 'The specified method is not allowed.');
+    Response::sendS3Error(405, 'MethodNotAllowed', 'The specified method is not allowed.');
 }
 
 // -------------------------------------------------------------
@@ -88,45 +135,46 @@ if (count($segments) === 1) {
 $bucketName = $segments[0];
 $objectKey = implode('/', array_slice($segments, 1));
 
-$bucket = S3Helper::getBucket($bucketName);
+$bucket = S3Bucket::getBucket($bucketName);
 if (!$bucket) {
-    ResponseHelper::sendS3Error(404, 'NoSuchBucket', 'The specified bucket does not exist.');
+    Response::sendS3Error(404, 'NoSuchBucket', 'The specified bucket does not exist.');
 }
+S3Bucket::applyCorsHeaders($bucket);
 
 // Authenticate request
-AuthHelper::authenticate($method, $path, $bucket);
+$auth = Auth::authenticate($method, $path, $bucket);
 
 if ($method === 'PUT') {
-    $copySource = AuthHelper::getHeader('x-amz-copy-source');
+    $copySource = Auth::getHeader('x-amz-copy-source');
     if ($copySource) {
         $copySource = '/' . ltrim($copySource, '/');
         $srcParts = array_values(array_filter(explode('/', $copySource)));
         if (count($srcParts) >= 2) {
             $srcBucketName = $srcParts[0];
             $srcObjectKey = implode('/', array_slice($srcParts, 1));
-            $srcBucket = S3Helper::getBucket($srcBucketName);
+            $srcBucket = S3Bucket::getBucket($srcBucketName);
             if (!$srcBucket) {
-                ResponseHelper::sendS3Error(404, 'NoSuchBucket', 'The source bucket does not exist.');
+                Response::sendS3Error(404, 'NoSuchBucket', 'The source bucket does not exist.');
             }
-            S3Helper::copyObject($srcBucket, $srcObjectKey, $bucket, $objectKey);
+            S3Object::copyObject($srcBucket, $srcObjectKey, $bucket, $objectKey);
         } else {
-            ResponseHelper::sendS3Error(400, 'InvalidArgument', 'Invalid x-amz-copy-source header.');
+            Response::sendS3Error(400, 'InvalidArgument', 'Invalid x-amz-copy-source header.');
         }
     } else {
-        S3Helper::putObject($bucket, $objectKey);
+        S3Object::putObject($bucket, $objectKey);
     }
 }
 
 if ($method === 'GET') {
-    S3Helper::getObject($bucket, $objectKey, false);
+    S3Object::getObject($bucket, $objectKey, false, $auth['anonymous'] ?? false);
 }
 
 if ($method === 'HEAD') {
-    S3Helper::getObject($bucket, $objectKey, true);
+    S3Object::getObject($bucket, $objectKey, true, $auth['anonymous'] ?? false);
 }
 
 if ($method === 'DELETE') {
-    S3Helper::deleteObject($bucket, $objectKey);
+    S3Object::deleteObject($bucket, $objectKey);
 }
 
-ResponseHelper::sendS3Error(405, 'MethodNotAllowed', 'The specified method is not allowed.');
+Response::sendS3Error(405, 'MethodNotAllowed', 'The specified method is not allowed.');
