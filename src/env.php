@@ -22,7 +22,8 @@ function loadEnv(string $path): void
             $value = trim($value);
             // Trim surrounding quotes
             if ((str_starts_with($value, '"') && str_ends_with($value, '"')) ||
-                (str_starts_with($value, "'") && str_ends_with($value, "'"))) {
+                (str_starts_with($value, "'") && str_ends_with($value, "'"))
+            ) {
                 $value = substr($value, 1, -1);
             }
             $_ENV[$key] = $value;

@@ -141,12 +141,24 @@ class S3Object
                     $oldPath = $baseDir . '/' . $bucket['name'] . '/' . $existing['relative_storage_path'];
                 }
                 DB::execute("UPDATE `objects` SET `size` = ?, `checksum` = ?, `relative_storage_path` = ?, `mime_type` = ?, `metadata_json` = ?, `updated_at` = NOW() WHERE `id` = ?", [
-                    $size, $checksum, $relativeStoragePath, $mimeType, $metadataJson, $existing['id']
+                    $size,
+                    $checksum,
+                    $relativeStoragePath,
+                    $mimeType,
+                    $metadataJson,
+                    $existing['id']
                 ]);
             } else {
                 $id = S3Common::generateId();
                 DB::execute("INSERT INTO `objects` (`id`, `bucket_id`, `object_key`, `mime_type`, `size`, `checksum`, `relative_storage_path`, `metadata_json`, `created_at`, `updated_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())", [
-                    $id, $bucket['id'], $objectKey, $mimeType, $size, $checksum, $relativeStoragePath, $metadataJson
+                    $id,
+                    $bucket['id'],
+                    $objectKey,
+                    $mimeType,
+                    $size,
+                    $checksum,
+                    $relativeStoragePath,
+                    $metadataJson
                 ]);
             }
 
@@ -227,12 +239,24 @@ class S3Object
                     $oldPath = $baseDir . '/' . $destBucket['name'] . '/' . $existing['relative_storage_path'];
                 }
                 DB::execute("UPDATE `objects` SET `size` = ?, `checksum` = ?, `relative_storage_path` = ?, `mime_type` = ?, `metadata_json` = ?, `updated_at` = NOW() WHERE `id` = ?", [
-                    $srcObj['size'], $srcObj['checksum'], $relativeStoragePath, $srcObj['mime_type'], $srcObj['metadata_json'], $existing['id']
+                    $srcObj['size'],
+                    $srcObj['checksum'],
+                    $relativeStoragePath,
+                    $srcObj['mime_type'],
+                    $srcObj['metadata_json'],
+                    $existing['id']
                 ]);
             } else {
                 $id = S3Common::generateId();
                 DB::execute("INSERT INTO `objects` (`id`, `bucket_id`, `object_key`, `mime_type`, `size`, `checksum`, `relative_storage_path`, `metadata_json`, `created_at`, `updated_at`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())", [
-                    $id, $destBucket['id'], $destObjectKey, $srcObj['mime_type'], $srcObj['size'], $srcObj['checksum'], $relativeStoragePath, $srcObj['metadata_json']
+                    $id,
+                    $destBucket['id'],
+                    $destObjectKey,
+                    $srcObj['mime_type'],
+                    $srcObj['size'],
+                    $srcObj['checksum'],
+                    $relativeStoragePath,
+                    $srcObj['metadata_json']
                 ]);
             }
 
@@ -263,8 +287,10 @@ void
 {
 self::validateObjectKey($objectKey);
 
-$obj = DB::fetchOne("SELECT * FROM `objects` WHERE `bucket_id` = ? AND `object_key_hash` = UNHEX(SHA2(?, 256))",
-[$bucket['id'], $objectKey]);
+$obj = DB::fetchOne(
+"SELECT * FROM `objects` WHERE `bucket_id` = ? AND `object_key_hash` = UNHEX(SHA2(?, 256))",
+[$bucket['id'], $objectKey]
+);
 if (!$obj) {
 Response::sendS3Error(404, 'NoSuchKey', 'The specified key does not exist.');
 }
@@ -283,11 +309,27 @@ $lastModified = strtotime($obj['updated_at']) ?: time();
 $cacheControl = $bucket['visibility'] === 'public' ? 'public, max-age=31536000, immutable' : 'private, no-store';
 
 if ($isHead) {
-Response::sendHeadResponse(200, $mimeType, (int)$obj['size'], $obj['checksum'] ?: '', $metadata, $lastModified,
-$cacheControl, $forceDownload);
+Response::sendHeadResponse(
+200,
+$mimeType,
+(int)$obj['size'],
+$obj['checksum'] ?: '',
+$metadata,
+$lastModified,
+$cacheControl,
+$forceDownload
+);
 } else {
-Response::streamFile($filePath, $mimeType, (int)$obj['size'], $obj['checksum'] ?: '', $metadata, $lastModified,
-$cacheControl, $forceDownload);
+Response::streamFile(
+$filePath,
+$mimeType,
+(int)$obj['size'],
+$obj['checksum'] ?: '',
+$metadata,
+$lastModified,
+$cacheControl,
+$forceDownload
+);
 }
 }
 
@@ -295,8 +337,10 @@ public static function deleteObject(array $bucket, string $objectKey): void
 {
 self::validateObjectKey($objectKey);
 
-$obj = DB::fetchOne("SELECT * FROM `objects` WHERE `bucket_id` = ? AND `object_key_hash` = UNHEX(SHA2(?, 256))",
-[$bucket['id'], $objectKey]);
+$obj = DB::fetchOne(
+"SELECT * FROM `objects` WHERE `bucket_id` = ? AND `object_key_hash` = UNHEX(SHA2(?, 256))",
+[$bucket['id'], $objectKey]
+);
 if ($obj) {
 DB::execute("DELETE FROM `objects` WHERE `id` = ?", [$obj['id']]);
 $filePath = S3Common::getStorageBaseDir() . '/' . $bucket['name'] . '/' . $obj['relative_storage_path'];
@@ -312,7 +356,7 @@ exit;
 /**
 * Batch delete for POST /{bucket}?delete. $keys is a list of object
 * keys parsed from the request's <Delete><Object>
-        <Key> XML.
+        z<Key> XML.
             */
             public static function deleteObjects(array $bucket, array $keys): void
             {
@@ -321,8 +365,10 @@ exit;
             $errors = [];
 
             foreach ($keys as $objectKey) {
-            if (trim($objectKey) === '' || str_contains($objectKey, '..') || str_starts_with($objectKey, '\\') ||
-            strlen($objectKey) > 1024) {
+            if (
+            trim($objectKey) === '' || str_contains($objectKey, '..') || str_starts_with($objectKey, '\\') ||
+            strlen($objectKey) > 1024
+            ) {
             $errors[] = ['key' => $objectKey, 'code' => 'InvalidArgument', 'message' => 'Invalid object key format or
             path traversal detected.'];
             continue;

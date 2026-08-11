@@ -59,43 +59,43 @@ class Log
         }
 
         echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n"
-. '<Error>'
-    . '<Code>InternalError</Code>'
-    . '<Message>We encountered an internal error. Please try again.</Message>'
-    . '<RequestId>' . htmlspecialchars(self::$requestId, ENT_XML1, 'UTF-8') . '</RequestId>'
-    . '</Error>';
-}
+            . '<Error>'
+            . '<Code>InternalError</Code>'
+            . '<Message>We encountered an internal error. Please try again.</Message>'
+            . '<RequestId>' . htmlspecialchars(self::$requestId, ENT_XML1, 'UTF-8') . '</RequestId>'
+            . '</Error>';
+    }
 
-public static function logAccess(): void
-{
-$status = http_response_code();
-$bytes = '-';
-foreach (headers_list() as $h) {
-if (stripos($h, 'Content-Length:') === 0) {
-$bytes = trim(substr($h, strlen('Content-Length:')));
-break;
-}
-}
+    public static function logAccess(): void
+    {
+        $status = http_response_code();
+        $bytes = '-';
+        foreach (headers_list() as $h) {
+            if (stripos($h, 'Content-Length:') === 0) {
+                $bytes = trim(substr($h, strlen('Content-Length:')));
+                break;
+            }
+        }
 
-self::appendLog('access.log', sprintf(
-"%s request_id=%s method=%s path=%s key=%s status=%s bytes=%s duration_ms=%s\n",
-date('c'),
-self::$requestId,
-$_SERVER['REQUEST_METHOD'] ?? '-',
-$_SERVER['REQUEST_URI'] ?? '-',
-self::$principal ?? '-',
-$status !== false ? $status : '-',
-$bytes,
-round((microtime(true) - self::$startTime) * 1000, 2)
-));
-}
+        self::appendLog('access.log', sprintf(
+            "%s request_id=%s method=%s path=%s key=%s status=%s bytes=%s duration_ms=%s\n",
+            date('c'),
+            self::$requestId,
+            $_SERVER['REQUEST_METHOD'] ?? '-',
+            $_SERVER['REQUEST_URI'] ?? '-',
+            self::$principal ?? '-',
+            $status !== false ? $status : '-',
+            $bytes,
+            round((microtime(true) - self::$startTime) * 1000, 2)
+        ));
+    }
 
-private static function appendLog(string $filename, string $line): void
-{
-$dir = rtrim(env('LOG_DIR', __DIR__ . '/../storage/logs'), '/\\');
-if (!is_dir($dir)) {
-@mkdir($dir, 0755, true);
-}
-@file_put_contents($dir . '/' . $filename, $line, FILE_APPEND | LOCK_EX);
-}
+    private static function appendLog(string $filename, string $line): void
+    {
+        $dir = rtrim(env('LOG_DIR', __DIR__ . '/../storage/logs'), '/\\');
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        @file_put_contents($dir . '/' . $filename, $line, FILE_APPEND | LOCK_EX);
+    }
 }
