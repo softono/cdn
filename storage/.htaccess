@@ -1,4 +1,8 @@
-# Prevent directory listing and execution of scripts in storage directory
+# Object bytes must only ever be reached through public/index.php's auth
+# checks (SigV4 / public-bucket rules) - never served directly by the web
+# server. index.php reads these files straight off disk (fopen/readfile, or
+# X-Sendfile, which Apache resolves from the filesystem, not over HTTP), so
+# blocking direct web access here doesn't break anything it needs.
 Options -Indexes -ExecCGI
 
 <IfModule mod_php7.c>
@@ -11,7 +15,10 @@ Options -Indexes -ExecCGI
 RemoveHandler .php .phtml .php3 .php4 .php5 .php7 .phps .phar
 RemoveType .php .phtml .php3 .php4 .php5 .php7 .phps .phar
 
-<FilesMatch "\.(php|phtml|php3|php4|php5|php7|phps|phar|asp|aspx|cgi|pl|exe)$">
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
     Order allow,deny
     Deny from all
-</FilesMatch>
+</IfModule>

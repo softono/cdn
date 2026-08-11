@@ -1,0 +1,25 @@
+# This directory is reachable directly because DocumentRoot is not pinned to
+# public/ in this environment. Deny access to everything except what
+# public/index.php explicitly serves, and route all other requests there.
+
+Options -Indexes
+
+<FilesMatch "^(\.env.*|\.git.*|\.gitignore|\.htaccess|db\.sql|CLAUDE\.md|README\.md|LICENSE)$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    RewriteRule ^\.git(/|$) - [F,L]
+    RewriteRule ^src(/|$) - [F,L]
+
+    # Forward Authorization header (Apache strips it by default)
+    RewriteCond %{HTTP:Authorization} ^(.*)
+    RewriteRule .* - [e=HTTP_AUTHORIZATION:%1]
+
+    # Real files/dirs (public/, storage/, ...) are served as-is
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ public/index.php [QSA,L]
+</IfModule>

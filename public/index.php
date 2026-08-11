@@ -29,6 +29,12 @@ $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH) ?? '/';
 // Determine root directory offset if running inside subfolder
 $scriptName = dirname($_SERVER['SCRIPT_NAME']);
 $scriptName = str_replace('\\', '/', $scriptName);
+// DocumentRoot may point at the project root (with a root .htaccess routing
+// into public/) rather than at public/ itself, in which case SCRIPT_NAME's
+// dirname carries a trailing /public that isn't part of the client-visible URL.
+if (str_ends_with($scriptName, '/public')) {
+    $scriptName = substr($scriptName, 0, -strlen('/public'));
+}
 if ($scriptName !== '/' && $scriptName !== '.' && str_starts_with($requestUri, $scriptName)) {
     $path = substr($requestUri, strlen($scriptName));
 } else {
