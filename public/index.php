@@ -8,13 +8,13 @@
 ini_set('display_errors', '0');
 error_reporting(E_ALL & ~E_DEPRECATED & ~E_STRICT);
 
-require_once __DIR__ . '/helper/env.php';
+require_once __DIR__ . '/src/env.php';
 loadEnv(__DIR__ . '/.env');
 
-require_once __DIR__ . '/helper/db.php';
-require_once __DIR__ . '/helper/response.php';
-require_once __DIR__ . '/helper/auth.php';
-require_once __DIR__ . '/helper/s3.php';
+require_once __DIR__ . '/src/db.php';
+require_once __DIR__ . '/src/response.php';
+require_once __DIR__ . '/src/auth.php';
+require_once __DIR__ . '/src/s3.php';
 
 // Parse Request Method and URI Path
 $method = $_SERVER['REQUEST_METHOD'];
