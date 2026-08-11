@@ -62,10 +62,7 @@ class S3Object
         }
 
         $fileUuid = S3Common::generateId();
-        $ext = pathinfo($objectKey, PATHINFO_EXTENSION);
-        $relativeDir = date('Y/m/d');
-        $filename = $fileUuid . ($ext ? '.' . $ext : '');
-        $relativeStoragePath = $relativeDir . '/' . $filename;
+        $relativeStoragePath = S3Common::buildRelativeStoragePath($objectKey);
 
         $baseDir = S3Common::getStorageBaseDir();
         $tmpDir = $baseDir . '/' . $bucket['name'] . '/.tmp';
@@ -116,8 +113,8 @@ class S3Object
         $metadataJson = !empty($metadata) ? json_encode($metadata) : null;
         $mimeType = $_SERVER['CONTENT_TYPE'] ?? 'application/octet-stream';
 
-        $destDir = $baseDir . '/' . $bucket['name'] . '/' . $relativeDir;
-        $destPath = $destDir . '/' . $filename;
+        $destPath = $baseDir . '/' . $bucket['name'] . '/' . $relativeStoragePath;
+        $destDir = dirname($destPath);
 
         $pdo = DB::getConnection();
         $renamed = false;
@@ -199,10 +196,7 @@ class S3Object
         }
 
         $fileUuid = S3Common::generateId();
-        $ext = pathinfo($destObjectKey, PATHINFO_EXTENSION);
-        $relativeDir = date('Y/m/d');
-        $filename = $fileUuid . ($ext ? '.' . $ext : '');
-        $relativeStoragePath = $relativeDir . '/' . $filename;
+        $relativeStoragePath = S3Common::buildRelativeStoragePath($destObjectKey);
 
         $tmpDir = $baseDir . '/' . $destBucket['name'] . '/.tmp';
         if (!is_dir($tmpDir)) {
@@ -214,8 +208,8 @@ class S3Object
             Response::sendS3Error(500, 'InternalError', 'Failed to copy object file.');
         }
 
-        $destDir = $baseDir . '/' . $destBucket['name'] . '/' . $relativeDir;
-        $destPath = $destDir . '/' . $filename;
+        $destPath = $baseDir . '/' . $destBucket['name'] . '/' . $relativeStoragePath;
+        $destDir = dirname($destPath);
 
         $pdo = DB::getConnection();
         $renamed = false;

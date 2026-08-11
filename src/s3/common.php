@@ -21,4 +21,12 @@ class S3Common
         }
         return rtrim($dir, '/\\');
     }
+
+    public static function buildRelativeStoragePath(string $objectKey): string
+    {
+        $parts = explode('/', ltrim($objectKey, '/'));
+        $insertIndex = min(2, max(0, count($parts) - 1));
+        array_splice($parts, $insertIndex, 0, [date('Y/m/d')]);
+        return implode('/', $parts);
+    }
 }

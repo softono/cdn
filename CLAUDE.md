@@ -14,7 +14,7 @@ There is no build step, package manager, or test suite — this is raw PHP serve
 - Document root is `public/`; `public/.htaccess` rewrites all non-file/non-dir requests to `public/index.php`, and forwards the `Authorization` header into `HTTP_AUTHORIZATION` (Apache normally strips it).
 - Copy `.env.example` to `.env` and fill in `DB_*` credentials, `BASE_URL`, `MAX_UPLOAD_SIZE`. `.env` is loaded manually by `src/env.php` (`loadEnv()`) — no vendor autoloading exists.
 - Initialize the database from `db.sql` (defines `buckets`, `api_keys`, `objects`). **`db.sql` DROPs and recreates all three tables on every run** — it's an initial-setup script, not a migration; never run it against a database that already has data.
-- Object bytes are written under `storage/` (or `STORAGE_DIR` env override), organized as `storage/{bucket}/{YYYY}/{MM}/{DD}/{uuid}.{ext}` — note the on-disk filename is unrelated to the S3 object key; the key-to-file mapping lives only in the `objects.relative_storage_path` column. Uploads land in `storage/{bucket}/.tmp/` first and are `rename()`d into place, so readers never observe a partially-written object.
+- Object bytes are written under `storage/` (or `STORAGE_DIR` env override), organized using the object key's path structure with a `{YYYY}/{MM}/{DD}` date folder inserted immediately before the filename / last path segment (or after the prefix for deeper paths) — stored in `objects.relative_storage_path`. Uploads land in `storage/{bucket}/.tmp/` first and are `rename()`d into place, so readers never observe a partially-written object.
 - `MAX_UPLOAD_SIZE` is deliberately set below the ~8MB threshold at which S3 SDKs (aws-cli, boto3) silently switch to multipart upload, since this API has no multipart support.
 
 ## Architecture
