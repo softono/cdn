@@ -62,7 +62,7 @@ class S3Object
         }
 
         $fileUuid = S3Common::generateId();
-        $relativeStoragePath = S3Common::buildRelativeStoragePath($objectKey);
+        $relativeStoragePath = S3Common::buildRelativeStoragePath($objectKey, $fileUuid);
 
         $baseDir = S3Common::getStorageBaseDir();
         $tmpDir = $baseDir . '/' . $bucket['name'] . '/.tmp';
@@ -196,7 +196,7 @@ class S3Object
         }
 
         $fileUuid = S3Common::generateId();
-        $relativeStoragePath = S3Common::buildRelativeStoragePath($destObjectKey);
+        $relativeStoragePath = S3Common::buildRelativeStoragePath($destObjectKey, $fileUuid);
 
         $tmpDir = $baseDir . '/' . $destBucket['name'] . '/.tmp';
         if (!is_dir($tmpDir)) {

@@ -22,9 +22,14 @@ class S3Common
         return rtrim($dir, '/\\');
     }
 
-    public static function buildRelativeStoragePath(string $objectKey): string
+    public static function buildRelativeStoragePath(string $objectKey, ?string $fileUuid = null): string
     {
         $parts = explode('/', ltrim($objectKey, '/'));
+        $ext = pathinfo($objectKey, PATHINFO_EXTENSION);
+        $uuid = $fileUuid ?? self::generateId();
+        $randomFilename = $uuid . ($ext !== '' ? '.' . $ext : '');
+        $parts[count($parts) - 1] = $randomFilename;
+
         $insertIndex = min(2, max(0, count($parts) - 1));
         array_splice($parts, $insertIndex, 0, [date('Y/m/d')]);
         return implode('/', $parts);
